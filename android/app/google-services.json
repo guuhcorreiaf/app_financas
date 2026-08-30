@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "609539836510",
+    "project_id": "financas-app-gustavo",
+    "storage_bucket": "financas-app-gustavo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:609539836510:android:26354cef9bfcc4136102cf",
+        "android_client_info": {
+          "package_name": "com.example.app_financas"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9ZRIn-lSvIkQmGUp4HoloRUBeuhmF-go"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
