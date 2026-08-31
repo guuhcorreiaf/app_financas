@@ -17,6 +17,13 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isRegister = false;
   bool _isLoading = false;
 
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _isLoading = true);
@@ -29,10 +36,11 @@ class _LoginScreenState extends State<LoginScreen> {
         await auth.signInWithEmail(
             _emailCtrl.text.trim(), _passwordCtrl.text);
       }
-    } on FirebaseException catch (e) {
+    } catch (e) {
       if (mounted) {
+        final msg = e is FirebaseException ? (e.message ?? 'Erro de autenticação') : 'Erro ao realizar login: $e';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message ?? 'Erro de autenticação')),
+          SnackBar(content: Text(msg)),
         );
       }
     } finally {
@@ -45,11 +53,11 @@ class _LoginScreenState extends State<LoginScreen> {
     final auth = Provider.of<AuthService>(context, listen: false);
     try {
       await auth.signInAnonymously();
-    } on FirebaseException catch (e) {
+    } catch (e) {
       if (mounted) {
+        final msg = e is FirebaseException ? (e.message ?? 'Erro ao entrar anonimamente') : 'Erro: $e';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(e.message ?? 'Erro ao entrar anonimamente')),
+          SnackBar(content: Text(msg)),
         );
       }
     } finally {
