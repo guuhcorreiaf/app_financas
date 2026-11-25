@@ -1,63 +1,107 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:app_financas/models/bill_model.dart';
+import 'package:app_financas/models/payment_record.dart';
 
 void main() {
-  group('Bill.addMonths', () {
-    test('soma meses mantendo o dia quando válido (Julho + 3x -> Ago, Set, Out)', () {
-      final start = DateTime(2026, 7, 15);
-      expect(Bill.addMonths(start, 0), DateTime(2026, 7, 15));
-      expect(Bill.addMonths(start, 1), DateTime(2026, 8, 15));
-      expect(Bill.addMonths(start, 2), DateTime(2026, 9, 15));
-      expect(Bill.addMonths(start, 3), DateTime(2026, 10, 15));
+  group('Bill.advanceToNextRecurrence', () {
+    test('avança 01/12/2026 (1/4) -> 01/01/2027 (2/4) -> 01/02/2027 (3/4) -> 01/03/2027 (4/4)', () {
+      var bill = Bill(
+        id: 'bill_1',
+        title: 'Internet',
+        amount: 120.0,
+        dueDate: DateTime(2026, 12, 1),
+        isRecurring: true,
+        installmentIndex: 1,
+        installmentTotal: 4,
+        originalDay: 1,
+      );
+
+      expect(bill.hasNextRecurrence, isTrue);
+
+      bill = bill.advanceToNextRecurrence();
+      expect(bill.dueDate, DateTime(2027, 1, 1));
+      expect(bill.installmentIndex, 2);
+      expect(bill.installmentTotal, 4);
+      expect(bill.isPaid, isFalse);
+      expect(bill.hasNextRecurrence, isTrue);
+
+      bill = bill.advanceToNextRecurrence();
+      expect(bill.dueDate, DateTime(2027, 2, 1));
+      expect(bill.installmentIndex, 3);
+      expect(bill.hasNextRecurrence, isTrue);
+
+      bill = bill.advanceToNextRecurrence();
+      expect(bill.dueDate, DateTime(2027, 3, 1));
+      expect(bill.installmentIndex, 4);
+      // Última parcela: após pagar esta, vai para o histórico e sai da tela inicial
+      expect(bill.hasNextRecurrence, isFalse);
     });
 
-    test('ajusta corretamente virada de ano', () {
-      final start = DateTime(2026, 11, 10);
-      expect(Bill.addMonths(start, 1), DateTime(2026, 12, 10));
-      expect(Bill.addMonths(start, 2), DateTime(2027, 1, 10));
-      expect(Bill.addMonths(start, 3), DateTime(2027, 2, 10));
+    test('preserva o dia original 31 mesmo após passar por fevereiro', () {
+      var bill = Bill(
+        id: 'bill_31',
+        title: 'Aluguel',
+        amount: 1500.0,
+        dueDate: DateTime(2026, 1, 31),
+        isRecurring: true,
+        installmentIndex: 1,
+        installmentTotal: 4,
+        originalDay: 31,
+      );
+
+      bill = bill.advanceToNextRecurrence();
+      expect(bill.dueDate, DateTime(2026, 2, 28));
+
+      bill = bill.advanceToNextRecurrence();
+      expect(bill.dueDate, DateTime(2026, 3, 31));
+
+      bill = bill.advanceToNextRecurrence();
+      expect(bill.dueDate, DateTime(2026, 4, 30));
     });
 
-    test('ajusta dia 31 para último dia de meses menores sem transbordar', () {
-      final start = DateTime(2026, 1, 31);
-      expect(Bill.addMonths(start, 1), DateTime(2026, 2, 28));
-      expect(Bill.addMonths(start, 2), DateTime(2026, 3, 31));
-      expect(Bill.addMonths(start, 3), DateTime(2026, 4, 30));
-
-      // Ano bissexto
-      final leapStart = DateTime(2028, 1, 31);
-      expect(Bill.addMonths(leapStart, 1), DateTime(2028, 2, 29));
+    test('conta não recorrente não tem próxima repetição', () {
+      final bill = Bill(
+        id: 'single',
+        title: 'Mercado',
+        amount: 250.0,
+        dueDate: DateTime(2026, 12, 5),
+        isRecurring: false,
+      );
+      expect(bill.hasNextRecurrence, isFalse);
     });
   });
 
-  group('Bill.generateRecurringSeries', () {
-    test('gera conta inicial + 3 repetições mensais com metadados corretos', () {
-      final series = Bill.generateRecurringSeries(
-        baseId: 'grp1',
+  group('PaymentRecord', () {
+    test('cria registro a partir da conta e restaura estado anterior ao desfazer', () {
+      final bill = Bill(
+        id: 'bill_1',
         title: 'Internet',
         amount: 120.0,
-        startDate: DateTime(2026, 7, 10),
-        additionalMonths: 3,
+        dueDate: DateTime(2026, 12, 1),
+        isRecurring: true,
+        installmentIndex: 1,
+        installmentTotal: 4,
+        originalDay: 1,
       );
 
-      expect(series.length, 4);
-      expect(series.map((b) => b.dueDate).toList(), [
-        DateTime(2026, 7, 10),
-        DateTime(2026, 8, 10),
-        DateTime(2026, 9, 10),
-        DateTime(2026, 10, 10),
-      ]);
+      final record = PaymentRecord.fromBill(
+        bill,
+        id: 'rec_1',
+        paidAt: DateTime(2026, 11, 25, 18, 30),
+      );
 
-      for (var i = 0; i < series.length; i++) {
-        expect(series[i].isRecurring, isTrue);
-        expect(series[i].recurrenceGroupId, 'grp1');
-        expect(series[i].installmentIndex, i + 1);
-        expect(series[i].installmentTotal, 4);
-        expect(series[i].isPaid, isFalse);
-      }
+      expect(record.title, 'Internet');
+      expect(record.dueDate, DateTime(2026, 12, 1));
+      expect(record.installmentIndex, 1);
+      expect(record.installmentTotal, 4);
 
-      // IDs únicos
-      expect(series.map((b) => b.id).toSet().length, 4);
+      final restored = record.toRestoredBill();
+      expect(restored.id, 'bill_1');
+      expect(restored.dueDate, DateTime(2026, 12, 1));
+      expect(restored.isPaid, isFalse);
+      expect(restored.isRecurring, isTrue);
+      expect(restored.installmentIndex, 1);
+      expect(restored.installmentTotal, 4);
     });
   });
 }

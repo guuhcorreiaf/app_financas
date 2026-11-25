@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/bill_model.dart';
+import '../models/payment_record.dart';
 import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
+import 'history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,21 +17,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  static const List<String> _monthNames = [
-    'Janeiro',
-    'Fevereiro',
-    'Março',
-    'Abril',
-    'Maio',
-    'Junho',
-    'Julho',
-    'Agosto',
-    'Setembro',
-    'Outubro',
-    'Novembro',
-    'Dezembro',
-  ];
-
   static const List<String> _shortMonthNames = [
     'Jan',
     'Fev',
@@ -48,15 +35,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final _currencyFmt = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   late final AnimationController _fabController;
   late final Animation<double> _fabScale;
-
-  late DateTime _selectedMonth;
-  bool _showAllMonths = false;
+  final Set<String> _payingBillIds = {};
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    _selectedMonth = DateTime(now.year, now.month);
     _fabController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
@@ -71,17 +54,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  String _formatMonthYear(DateTime date) =>
-      '${_monthNames[date.month - 1]} ${date.year}';
-
   String _formatShortMonthYear(DateTime date) =>
       '${_shortMonthNames[date.month - 1]}/${date.year}';
 
-  void _changeMonth(int delta) {
-    setState(() {
-      _showAllMonths = false;
-      _selectedMonth = Bill.addMonths(_selectedMonth, delta);
-    });
+  void _openHistory(String uid) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => HistoryScreen(uid: uid)),
+    );
   }
 
   double? _parseAmount(String? text) {
@@ -131,6 +111,53 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ],
       ),
     );
+  }
+
+  // ========== Marcar Conta como Paga (Avança Recorrência + Envia ao Histórico) ==========
+  Future<void> _handlePayBill(String uid, Bill bill) async {
+    if (_payingBillIds.contains(bill.id)) return;
+    setState(() => _payingBillIds.add(bill.id));
+
+    try {
+      final firestore = Provider.of<FirestoreService>(context, listen: false);
+      final nextBill = await firestore.payBill(uid, bill);
+
+      if (!mounted) return;
+      final paidParcelLabel =
+          bill.installmentIndex != null && bill.installmentTotal != null
+              ? ' (${bill.installmentIndex}/${bill.installmentTotal})'
+              : '';
+
+      final message = nextBill != null
+          ? '"${bill.title}"$paidParcelLabel paga! Próximo vencimento: ${DateFormat('dd/MM/yyyy').format(nextBill.dueDate)}'
+          : '"${bill.title}"$paidParcelLabel paga e enviada para o Histórico!';
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFF10B981),
+          action: SnackBarAction(
+            label: 'Ver Histórico',
+            textColor: Colors.white,
+            onPressed: () => _openHistory(uid),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao registrar pagamento: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _payingBillIds.remove(bill.id));
+      }
+    }
   }
 
   // ========== Modal para Editar Salário ==========
@@ -359,103 +386,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // ========== Seletor de Mês ==========
-  Widget _buildMonthSelector() {
-    final now = DateTime.now();
-    final isCurrentMonth =
-        !_showAllMonths && _selectedMonth.year == now.year && _selectedMonth.month == now.month;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E1E2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            onPressed: () => _changeMonth(-1),
-            icon: const Icon(Icons.chevron_left_rounded, color: Colors.white70),
-            tooltip: 'Mês anterior',
-            visualDensity: VisualDensity.compact,
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _showAllMonths = false;
-                  _selectedMonth = DateTime(now.year, now.month);
-                });
-              },
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _showAllMonths ? 'Todos os Meses' : _formatMonthYear(_selectedMonth),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  if (!isCurrentMonth && !_showAllMonths)
-                    const Text(
-                      'Toque para voltar ao mês atual',
-                      style: TextStyle(color: Color(0xFF6C63FF), fontSize: 10),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          IconButton(
-            onPressed: () => _changeMonth(1),
-            icon: const Icon(Icons.chevron_right_rounded, color: Colors.white70),
-            tooltip: 'Próximo mês',
-            visualDensity: VisualDensity.compact,
-          ),
-          const SizedBox(width: 4),
-          GestureDetector(
-            onTap: () => setState(() => _showAllMonths = !_showAllMonths),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: _showAllMonths ? const Color(0xFF6C63FF) : Colors.white10,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                _showAllMonths ? 'Por mês' : 'Todos',
-                style: TextStyle(
-                  color: _showAllMonths ? Colors.white : Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ========== UI Helpers ===========
   Widget _buildHeader({
     required User user,
     required String uid,
     required double salary,
-    required double totalPaid,
+    required double totalPaidThisMonth,
     required double totalPending,
     required double currentBalance,
     required double projectedFinalBalance,
+    required int historyCount,
   }) {
     final userLabel = user.isAnonymous
         ? 'Usuário Anônimo'
         : (user.email ?? 'Minha Conta');
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+      margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -497,6 +444,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ],
                 ),
               ),
+              GestureDetector(
+                onTap: () => _openHistory(uid),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  margin: const EdgeInsets.only(right: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white24, width: 0.8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.history_rounded, color: Colors.white, size: 16),
+                      const SizedBox(width: 5),
+                      Text(
+                        historyCount > 0 ? 'Histórico ($historyCount)' : 'Histórico',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               IconButton(
                 onPressed: _confirmSignOut,
                 icon: const Icon(Icons.logout, color: Colors.white70, size: 20),
@@ -507,12 +481,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
           const SizedBox(height: 18),
-          Text(
-            _showAllMonths
-                ? 'Saldo Atual Disponível (Geral)'
-                : 'Saldo Disponível — ${_formatShortMonthYear(_selectedMonth)}',
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
-          ),
+          const Text('Saldo Atual Disponível', style: TextStyle(color: Colors.white70, fontSize: 13)),
           const SizedBox(height: 4),
           Text(
             _currencyFmt.format(currentBalance),
@@ -544,7 +513,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 label: 'Salário',
                 value: _currencyFmt.format(salary),
                 onTap: () => _showEditSalaryModal(uid, salary),
-                showEditIcon: true,
+                trailingIcon: Icons.edit_outlined,
               ),
               const SizedBox(width: 8),
               _buildStat(
@@ -556,9 +525,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SizedBox(width: 8),
               _buildStat(
                 icon: Icons.check_circle_outline,
-                label: 'Pago',
-                value: _currencyFmt.format(totalPaid),
+                label: 'Pago (mês)',
+                value: _currencyFmt.format(totalPaidThisMonth),
                 valueColor: Colors.green.shade200,
+                onTap: () => _openHistory(uid),
+                trailingIcon: Icons.history_rounded,
               ),
             ],
           ),
@@ -573,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required String value,
     Color? valueColor,
     VoidCallback? onTap,
-    bool showEditIcon = false,
+    IconData? trailingIcon,
   }) {
     return Expanded(
       child: GestureDetector(
@@ -583,7 +554,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           decoration: BoxDecoration(
             color: Colors.white12,
             borderRadius: BorderRadius.circular(14),
-            border: showEditIcon ? Border.all(color: Colors.white24, width: 0.8) : null,
+            border: trailingIcon != null ? Border.all(color: Colors.white24, width: 0.8) : null,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -606,8 +577,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ],
                     ),
                   ),
-                  if (showEditIcon)
-                    const Icon(Icons.edit_outlined, color: Colors.white54, size: 12),
+                  if (trailingIcon != null)
+                    Icon(trailingIcon, color: Colors.white54, size: 12),
                 ],
               ),
               const SizedBox(height: 4),
@@ -788,42 +759,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // ========== Modal para Criar ou Editar Conta ===========
-  void _showBillModal(String uid, List<Bill> allBills, {Bill? billToEdit}) {
+  void _showBillModal(String uid, {Bill? billToEdit}) {
     final isEditing = billToEdit != null;
     final titleCtrl = TextEditingController(text: isEditing ? billToEdit.title : '');
     final amountCtrl = TextEditingController(
       text: isEditing ? billToEdit.amount.toStringAsFixed(2).replaceAll('.', ',') : '',
     );
-
-    final now = DateTime.now();
-    DateTime defaultNewDate = DateTime.now().add(const Duration(days: 7));
-    if (!_showAllMonths &&
-        (_selectedMonth.year != now.year || _selectedMonth.month != now.month)) {
-      final lastDay = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0).day;
-      final day = now.day > lastDay ? lastDay : now.day;
-      defaultNewDate = DateTime(_selectedMonth.year, _selectedMonth.month, day);
-    }
-
-    DateTime selectedDate = isEditing ? billToEdit.dueDate : defaultNewDate;
+    DateTime selectedDate = isEditing ? billToEdit.dueDate : DateTime.now().add(const Duration(days: 7));
     bool isRecurring = isEditing ? billToEdit.isRecurring : false;
-    int additionalMonths = 3;
-    final repeatCtrl = TextEditingController(text: '$additionalMonths');
 
-    // Para edição de contas que já pertencem a uma série recorrente
-    final futureSameGroupBills = (isEditing && billToEdit.recurrenceGroupId != null)
-        ? allBills
-            .where((b) =>
-                b.id != billToEdit.id &&
-                b.recurrenceGroupId == billToEdit.recurrenceGroupId &&
-                !b.dueDate.isBefore(billToEdit.dueDate))
-            .toList()
-        : <Bill>[];
-    bool updateFutureInSeries = false;
-
+    final currentInstallment = isEditing ? (billToEdit.installmentIndex ?? 1) : 1;
+    int remainingRepeats = isEditing && billToEdit.isRecurring && billToEdit.installmentTotal != null
+        ? (billToEdit.installmentTotal! - currentInstallment).clamp(1, 60)
+        : 3;
+    final repeatCtrl = TextEditingController(text: '$remainingRepeats');
     final formKey = GlobalKey<FormState>();
     bool isSubmitting = false;
-
-    final canGenerateFutureMonths = !isEditing || !billToEdit.isRecurring;
 
     showModalBottomSheet(
       context: context,
@@ -834,7 +785,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           void setRepeats(int value) {
             final clamped = value.clamp(1, 60);
             setModalState(() {
-              additionalMonths = clamped;
+              remainingRepeats = clamped;
               repeatCtrl.text = '$clamped';
               repeatCtrl.selection = TextSelection.fromPosition(
                 TextPosition(offset: repeatCtrl.text.length),
@@ -843,21 +794,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           }
 
           final previewDates = List.generate(
-            1 + additionalMonths,
-            (i) => Bill.addMonths(selectedDate, i),
+            1 + remainingRepeats,
+            (i) => Bill.addMonths(selectedDate, i, preferredDay: selectedDate.day),
           );
-
-          final showRecurrenceSetup = isRecurring && canGenerateFutureMonths;
-
-          String submitButtonLabel() {
-            if (showRecurrenceSetup) {
-              if (isEditing) {
-                return 'Atualizar e Gerar +$additionalMonths ${additionalMonths == 1 ? 'mês' : 'meses'}';
-              }
-              return 'Salvar ${1 + additionalMonths} Contas';
-            }
-            return isEditing ? 'Atualizar Conta' : 'Salvar Conta';
-          }
 
           return Container(
             decoration: const BoxDecoration(
@@ -895,6 +834,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
                             ),
                             if (isEditing &&
+                                billToEdit.isRecurring &&
                                 billToEdit.installmentIndex != null &&
                                 billToEdit.installmentTotal != null)
                               Container(
@@ -974,21 +914,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Recorrente Mensal', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
-                          subtitle: Text(
-                            canGenerateFutureMonths
-                                ? 'Cria automaticamente esta conta nos próximos meses'
-                                : 'Conta faz parte de uma recorrência mensal',
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          subtitle: const Text(
+                            'Ao pagar, envia para o Histórico e avança para o próximo mês',
+                            style: TextStyle(color: Colors.white54, fontSize: 12),
                           ),
                           value: isRecurring,
                           activeThumbColor: const Color(0xFF6C63FF),
-                          onChanged: canGenerateFutureMonths
-                              ? (v) => setModalState(() => isRecurring = v)
-                              : null,
+                          onChanged: (v) => setModalState(() => isRecurring = v),
                         ),
 
-                        // ========== Configuração de Repetições Mensais ==========
-                        if (showRecurrenceSetup) ...[
+                        if (isRecurring) ...[
                           const SizedBox(height: 8),
                           Container(
                             padding: const EdgeInsets.all(16),
@@ -1012,8 +947,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 Row(
                                   children: [
                                     IconButton(
-                                      onPressed: additionalMonths > 1
-                                          ? () => setRepeats(additionalMonths - 1)
+                                      onPressed: remainingRepeats > 1
+                                          ? () => setRepeats(remainingRepeats - 1)
                                           : null,
                                       icon: const Icon(Icons.remove_circle_outline),
                                       color: const Color(0xFF6C63FF),
@@ -1038,7 +973,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                                           filled: true,
                                           fillColor: const Color(0xFF1E1E2E),
-                                          suffixText: additionalMonths == 1 ? 'mês' : 'meses',
+                                          suffixText: remainingRepeats == 1 ? 'mês' : 'meses',
                                           suffixStyle: const TextStyle(color: Colors.white54, fontSize: 13),
                                           enabledBorder: OutlineInputBorder(
                                             borderRadius: BorderRadius.circular(12),
@@ -1052,7 +987,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         onChanged: (v) {
                                           final parsed = int.tryParse(v);
                                           if (parsed != null && parsed >= 1 && parsed <= 60) {
-                                            setModalState(() => additionalMonths = parsed);
+                                            setModalState(() => remainingRepeats = parsed);
                                           }
                                         },
                                         validator: (v) {
@@ -1065,8 +1000,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                       ),
                                     ),
                                     IconButton(
-                                      onPressed: additionalMonths < 60
-                                          ? () => setRepeats(additionalMonths + 1)
+                                      onPressed: remainingRepeats < 60
+                                          ? () => setRepeats(remainingRepeats + 1)
                                           : null,
                                       icon: const Icon(Icons.add_circle_outline),
                                       color: const Color(0xFF6C63FF),
@@ -1079,7 +1014,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   spacing: 8,
                                   runSpacing: 6,
                                   children: [1, 3, 6, 11, 12].map((preset) {
-                                    final isSelected = additionalMonths == preset;
+                                    final isSelected = remainingRepeats == preset;
                                     return ChoiceChip(
                                       label: Text('+$preset${preset == 1 ? ' mês' : 'x'}'),
                                       selected: isSelected,
@@ -1115,7 +1050,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           const SizedBox(width: 6),
                                           Expanded(
                                             child: Text(
-                                              'Total: ${previewDates.length} contas (${_formatShortMonthYear(previewDates.first)} a ${_formatShortMonthYear(previewDates.last)})',
+                                              'Sequência automática: ${previewDates.length} parcelas (${_formatShortMonthYear(previewDates.first)} a ${_formatShortMonthYear(previewDates.last)})',
                                               style: const TextStyle(
                                                 color: Color(0xFFC4BFFF),
                                                 fontSize: 12,
@@ -1164,21 +1099,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                         ],
 
-                        if (isEditing && futureSameGroupBills.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          CheckboxListTile(
-                            contentPadding: EdgeInsets.zero,
-                            value: updateFutureInSeries,
-                            activeColor: const Color(0xFF6C63FF),
-                            onChanged: (v) => setModalState(() => updateFutureInSeries = v ?? false),
-                            title: Text(
-                              'Atualizar descrição e valor nas próximas ${futureSameGroupBills.length} conta(s)',
-                              style: const TextStyle(color: Colors.white70, fontSize: 13),
-                            ),
-                            controlAffinity: ListTileControlAffinity.leading,
-                          ),
-                        ],
-
                         const SizedBox(height: 24),
                         SizedBox(
                           width: double.infinity,
@@ -1192,78 +1112,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     if (amountVal == null) return;
                                     setModalState(() => isSubmitting = true);
 
-                                    final firestore = Provider.of<FirestoreService>(context, listen: false);
-                                    final trimmedTitle = titleCtrl.text.trim();
+                                    final repeats = isRecurring
+                                        ? (int.tryParse(repeatCtrl.text) ?? remainingRepeats)
+                                        : 0;
+                                    final nextIndex = isRecurring ? currentInstallment : null;
+                                    final nextTotal = isRecurring ? (currentInstallment + repeats) : null;
+
+                                    final bill = Bill(
+                                      id: isEditing ? billToEdit.id : DateTime.now().millisecondsSinceEpoch.toString(),
+                                      title: titleCtrl.text.trim(),
+                                      amount: amountVal,
+                                      dueDate: selectedDate,
+                                      isPaid: false,
+                                      isRecurring: isRecurring,
+                                      category: isEditing ? billToEdit.category : 'Outros',
+                                      installmentIndex: nextIndex,
+                                      installmentTotal: nextTotal,
+                                      originalDay: isRecurring ? selectedDate.day : null,
+                                    );
 
                                     try {
-                                      if (showRecurrenceSetup) {
-                                        final repeats = int.tryParse(repeatCtrl.text) ?? additionalMonths;
-                                        final baseId = DateTime.now().millisecondsSinceEpoch.toString();
-                                        final series = Bill.generateRecurringSeries(
-                                          baseId: baseId,
-                                          title: trimmedTitle,
-                                          amount: amountVal,
-                                          startDate: selectedDate,
-                                          additionalMonths: repeats,
-                                          isPaidFirst: isEditing ? billToEdit.isPaid : false,
-                                          category: isEditing ? billToEdit.category : 'Outros',
-                                          existingFirstId: isEditing ? billToEdit.id : null,
-                                        );
-                                        await firestore.addBills(uid, series);
-
-                                        if (!_showAllMonths && mounted) {
-                                          setState(() {
-                                            _selectedMonth = DateTime(selectedDate.year, selectedDate.month);
-                                          });
-                                        }
-                                        if (ctx.mounted) Navigator.pop(ctx);
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                '${series.length} contas salvas (${_formatShortMonthYear(series.first.dueDate)} a ${_formatShortMonthYear(series.last.dueDate)})!',
-                                              ),
-                                              backgroundColor: const Color(0xFF10B981),
-                                            ),
-                                          );
-                                        }
-                                      } else if (isEditing) {
-                                        final updatedBill = billToEdit.copyWith(
-                                          title: trimmedTitle,
-                                          amount: amountVal,
-                                          dueDate: selectedDate,
-                                          isRecurring: isRecurring,
-                                        );
-                                        if (updateFutureInSeries && futureSameGroupBills.isNotEmpty) {
-                                          final toUpdate = <Bill>[
-                                            updatedBill,
-                                            ...futureSameGroupBills.map(
-                                              (b) => b.copyWith(title: trimmedTitle, amount: amountVal),
-                                            ),
-                                          ];
-                                          await firestore.updateBills(uid, toUpdate);
-                                        } else {
-                                          await firestore.updateBill(uid, updatedBill);
-                                        }
-                                        if (ctx.mounted) Navigator.pop(ctx);
+                                      final firestore = Provider.of<FirestoreService>(context, listen: false);
+                                      if (isEditing) {
+                                        await firestore.updateBill(uid, bill);
                                       } else {
-                                        final bill = Bill(
-                                          id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                          title: trimmedTitle,
-                                          amount: amountVal,
-                                          dueDate: selectedDate,
-                                          isPaid: false,
-                                          isRecurring: false,
-                                          category: 'Outros',
-                                        );
                                         await firestore.addBill(uid, bill);
-                                        if (!_showAllMonths && mounted) {
-                                          setState(() {
-                                            _selectedMonth = DateTime(selectedDate.year, selectedDate.month);
-                                          });
-                                        }
-                                        if (ctx.mounted) Navigator.pop(ctx);
                                       }
+                                      if (ctx.mounted) Navigator.pop(ctx);
                                     } catch (e) {
                                       setModalState(() => isSubmitting = false);
                                       if (mounted) {
@@ -1289,7 +1164,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
                                   )
                                 : Text(
-                                    submitButtonLabel(),
+                                    isEditing ? 'Atualizar Conta' : 'Salvar Conta',
                                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                   ),
                           ),
@@ -1306,89 +1181,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildBillCard(Bill bill, String uid, List<Bill> allBills) {
+  Widget _buildBillCard(Bill bill, String uid) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final billDate = DateTime(bill.dueDate.year, bill.dueDate.month, bill.dueDate.day);
 
-    final isOverdue = !bill.isPaid && billDate.isBefore(today);
+    final isOverdue = billDate.isBefore(today);
     final isToday = billDate.isAtSameMomentAs(today);
     final daysLeft = billDate.difference(today).inDays;
+    final isPaying = _payingBillIds.contains(bill.id);
 
     String subtitleText;
     Color subtitleColor;
 
-    if (bill.isPaid) {
-      subtitleText = 'Pago ✓ — ${DateFormat('dd/MM/yyyy').format(bill.dueDate)}';
-      subtitleColor = Colors.white24;
-    } else if (isOverdue) {
+    if (isOverdue) {
       subtitleText = 'Venceu em ${DateFormat('dd/MM/yyyy').format(bill.dueDate)}';
       subtitleColor = Colors.red.shade300;
     } else if (isToday) {
-      subtitleText = 'Vence hoje!';
+      subtitleText = 'Vence hoje! — ${DateFormat('dd/MM/yyyy').format(bill.dueDate)}';
       subtitleColor = Colors.orange.shade300;
     } else {
       subtitleText = 'Vence em $daysLeft dia(s) — ${DateFormat('dd/MM/yyyy').format(bill.dueDate)}';
       subtitleColor = daysLeft <= 3 ? Colors.orange.shade300 : Colors.white38;
     }
 
-    final futureSameGroup = bill.recurrenceGroupId != null
-        ? allBills
-            .where((b) =>
-                b.recurrenceGroupId == bill.recurrenceGroupId &&
-                !b.dueDate.isBefore(bill.dueDate))
-            .toList()
-        : <Bill>[];
-
-    List<String> idsToDelete = [bill.id];
-
     return Dismissible(
       key: Key(bill.id),
       direction: DismissDirection.endToStart,
       confirmDismiss: (direction) async {
-        final hasFutureGroup = futureSameGroup.length > 1;
-        final result = await showDialog<String>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: const Color(0xFF1E1E2E),
-            title: const Text('Excluir conta', style: TextStyle(color: Colors.white)),
-            content: Text(
-              hasFutureGroup
-                  ? 'Deseja excluir apenas "${bill.title}" (${DateFormat('dd/MM/yyyy').format(bill.dueDate)}) ou também as próximas ${futureSameGroup.length - 1} repetições?'
-                  : 'Deseja excluir "${bill.title}"?',
-              style: const TextStyle(color: Colors.white70),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-              ),
-              if (hasFutureGroup)
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, 'future'),
-                  child: Text(
-                    'Esta e futuras (${futureSameGroup.length})',
-                    style: TextStyle(color: Colors.red.shade300, fontWeight: FontWeight.bold),
+        return await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: const Color(0xFF1E1E2E),
+                title: const Text('Excluir conta', style: TextStyle(color: Colors.white)),
+                content: Text('Deseja excluir "${bill.title}"?', style: const TextStyle(color: Colors.white70)),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                   ),
-                ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
-                onPressed: () => Navigator.pop(ctx, 'single'),
-                child: Text(hasFutureGroup ? 'Só esta' : 'Excluir', style: const TextStyle(color: Colors.white)),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Excluir', style: TextStyle(color: Colors.white)),
+                  ),
+                ],
               ),
-            ],
-          ),
-        );
-
-        if (result == 'future') {
-          idsToDelete = futureSameGroup.map((b) => b.id).toList();
-          return true;
-        }
-        if (result == 'single') {
-          idsToDelete = [bill.id];
-          return true;
-        }
-        return false;
+            ) ??
+            false;
       },
       background: Container(
         alignment: Alignment.centerRight,
@@ -1397,43 +1237,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         decoration: BoxDecoration(color: Colors.red.shade900, borderRadius: BorderRadius.circular(18)),
         child: const Icon(Icons.delete_outline, color: Colors.white, size: 26),
       ),
-      onDismissed: (_) => Provider.of<FirestoreService>(context, listen: false).deleteBills(uid, idsToDelete),
+      onDismissed: (_) => Provider.of<FirestoreService>(context, listen: false).deleteBill(uid, bill.id),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
         decoration: BoxDecoration(
           color: const Color(0xFF1E1E2E),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: isOverdue
-                ? const Color(0x66EF4444)
-                : const Color(0x0FFFFFFF),
+            color: isOverdue ? const Color(0x66EF4444) : const Color(0x0FFFFFFF),
           ),
         ),
         child: ListTile(
-          onTap: () => _showBillModal(uid, allBills, billToEdit: bill),
+          onTap: () => _showBillModal(uid, billToEdit: bill),
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           leading: Container(
             width: 46,
             height: 46,
             decoration: BoxDecoration(
-              color: bill.isPaid
-                  ? const Color(0x2622C55E)
-                  : isOverdue
-                      ? const Color(0x26EF4444)
-                      : const Color(0x266C63FF),
+              color: isOverdue ? const Color(0x26EF4444) : const Color(0x266C63FF),
               shape: BoxShape.circle,
             ),
             child: Icon(
-              bill.isPaid
-                  ? Icons.check_circle_outline
-                  : isOverdue
-                      ? Icons.warning_amber_rounded
-                      : Icons.schedule_rounded,
-              color: bill.isPaid
-                  ? const Color(0xFF22C55E)
-                  : isOverdue
-                      ? Colors.red.shade300
-                      : const Color(0xFF6C63FF),
+              isOverdue ? Icons.warning_amber_rounded : Icons.schedule_rounded,
+              color: isOverdue ? Colors.red.shade300 : const Color(0xFF6C63FF),
               size: 22,
             ),
           ),
@@ -1442,12 +1268,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               Expanded(
                 child: Text(
                   bill.title,
-                  style: TextStyle(
-                    color: bill.isPaid ? Colors.white38 : Colors.white,
+                  style: const TextStyle(
+                    color: Colors.white,
                     fontWeight: FontWeight.w600,
                     fontSize: 15,
-                    decoration: bill.isPaid ? TextDecoration.lineThrough : null,
-                    decorationColor: Colors.white38,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1491,31 +1315,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               Text(
                 _currencyFmt.format(bill.amount),
-                style: TextStyle(
-                  color: bill.isPaid ? Colors.white38 : Colors.white,
+                style: const TextStyle(
+                  color: Colors.white,
                   fontWeight: FontWeight.bold,
                   fontSize: 15,
                 ),
               ),
               const SizedBox(height: 4),
               GestureDetector(
-                onTap: () async {
-                  await Provider.of<FirestoreService>(context, listen: false).toggleBillStatus(uid, bill.id, !bill.isPaid);
-                },
+                onTap: isPaying ? null : () => _handlePayBill(uid, bill),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: bill.isPaid ? Colors.white12 : const Color(0x336C63FF),
+                    color: const Color(0x336C63FF),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(
-                    bill.isPaid ? 'Desfazer' : 'Pagar',
-                    style: TextStyle(
-                      color: bill.isPaid ? Colors.white38 : const Color(0xFF6C63FF),
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  child: isPaying
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            color: Color(0xFF9D97FF),
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text(
+                          'Pagar',
+                          style: TextStyle(
+                            color: Color(0xFF9D97FF),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                 ),
               ),
             ],
@@ -1568,6 +1399,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     final uid = user.uid;
     final firestore = Provider.of<FirestoreService>(context, listen: false);
+    final now = DateTime.now();
 
     return StreamBuilder<double>(
       stream: firestore.salaryStream(uid),
@@ -1577,116 +1409,116 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           stream: firestore.savingsStream(uid),
           builder: (cSavings, savingsSnap) {
             final savings = savingsSnap.data ?? 0.0;
-            return StreamBuilder<List<Bill>>(
-              stream: firestore.billsStream(uid),
-              builder: (cBills, billsSnap) {
-                if (billsSnap.hasError) {
-                  return Scaffold(
-                    backgroundColor: const Color(0xFF12121C),
-                    body: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24.0),
-                        child: Text(
-                          'Erro ao carregar contas do Firebase: ${billsSnap.error}',
-                          style: const TextStyle(color: Colors.redAccent, fontSize: 14),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                  );
-                }
+            return StreamBuilder<List<PaymentRecord>>(
+              stream: firestore.paymentHistoryStream(uid),
+              builder: (cHistory, historySnap) {
+                final history = historySnap.data ?? [];
+                final totalPaidThisMonth = history
+                    .where((r) => r.paidAt.year == now.year && r.paidAt.month == now.month)
+                    .fold(0.0, (s, r) => s + r.amount);
 
-                final allBills = billsSnap.data ?? [];
-                final visibleBills = _showAllMonths
-                    ? allBills
-                    : allBills
-                        .where((b) =>
-                            b.dueDate.year == _selectedMonth.year &&
-                            b.dueDate.month == _selectedMonth.month)
-                        .toList();
-
-                final totalPaid = visibleBills.where((b) => b.isPaid).fold(0.0, (s, b) => s + b.amount);
-                final totalPending = visibleBills.where((b) => !b.isPaid).fold(0.0, (s, b) => s + b.amount);
-
-                // Regras de negócio:
-                final projectedLeftover = salary - (totalPaid + totalPending);
-                final suggestedReserve = projectedLeftover > 0 ? (projectedLeftover * 0.10) : 0.0;
-
-                final currentBalance = salary - totalPaid - savings;
-                final projectedFinalBalance = salary - (totalPaid + totalPending) - savings;
-
-                return Scaffold(
-                  backgroundColor: const Color(0xFF12121C),
-                  body: SafeArea(
-                    child: CustomScrollView(
-                      slivers: [
-                        SliverToBoxAdapter(child: _buildMonthSelector()),
-                        SliverToBoxAdapter(
-                          child: _buildHeader(
-                            user: user,
-                            uid: uid,
-                            salary: salary,
-                            totalPaid: totalPaid,
-                            totalPending: totalPending,
-                            currentBalance: currentBalance,
-                            projectedFinalBalance: projectedFinalBalance,
-                          ),
-                        ),
-                        SliverToBoxAdapter(
-                          child: _buildSavingsCard(
-                            uid: uid,
-                            savings: savings,
-                            suggestedReserve: suggestedReserve,
-                            projectedLeftover: projectedLeftover,
-                          ),
-                        ),
-                        SliverToBoxAdapter(
+                return StreamBuilder<List<Bill>>(
+                  stream: firestore.billsStream(uid),
+                  builder: (cBills, billsSnap) {
+                    if (billsSnap.hasError) {
+                      return Scaffold(
+                        backgroundColor: const Color(0xFF12121C),
+                        body: Center(
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  _showAllMonths
-                                      ? 'Todas as Contas'
-                                      : 'Contas de ${_formatShortMonthYear(_selectedMonth)}',
-                                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  '${visibleBills.length} item(s)',
-                                  style: const TextStyle(color: Colors.white38, fontSize: 13),
-                                ),
-                              ],
+                            padding: const EdgeInsets.all(24.0),
+                            child: Text(
+                              'Erro ao carregar contas do Firebase: ${billsSnap.error}',
+                              style: const TextStyle(color: Colors.redAccent, fontSize: 14),
+                              textAlign: TextAlign.center,
                             ),
                           ),
                         ),
-                        visibleBills.isEmpty
-                            ? SliverFillRemaining(
-                                hasScrollBody: false,
-                                child: _buildEmptyState(allBills.length),
-                              )
-                            : SliverList(
-                                delegate: SliverChildBuilderDelegate(
-                                  (_, i) => _buildBillCard(visibleBills[i], uid, allBills),
-                                  childCount: visibleBills.length,
+                      );
+                    }
+
+                    // Apenas contas pendentes ficam na tela inicial (pagas vão para o Histórico)
+                    final activeBills = (billsSnap.data ?? []).where((b) => !b.isPaid).toList();
+                    final totalPending = activeBills.fold(0.0, (s, b) => s + b.amount);
+
+                    // Regras de negócio:
+                    final projectedLeftover = salary - (totalPaidThisMonth + totalPending);
+                    final suggestedReserve = projectedLeftover > 0 ? (projectedLeftover * 0.10) : 0.0;
+
+                    final currentBalance = salary - totalPaidThisMonth - savings;
+                    final projectedFinalBalance = salary - (totalPaidThisMonth + totalPending) - savings;
+
+                    return Scaffold(
+                      backgroundColor: const Color(0xFF12121C),
+                      body: SafeArea(
+                        child: CustomScrollView(
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: _buildHeader(
+                                user: user,
+                                uid: uid,
+                                salary: salary,
+                                totalPaidThisMonth: totalPaidThisMonth,
+                                totalPending: totalPending,
+                                currentBalance: currentBalance,
+                                projectedFinalBalance: projectedFinalBalance,
+                                historyCount: history.length,
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: _buildSavingsCard(
+                                uid: uid,
+                                savings: savings,
+                                suggestedReserve: suggestedReserve,
+                                projectedLeftover: projectedLeftover,
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'Contas a Pagar',
+                                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                    ),
+                                    Text(
+                                      '${activeBills.length} pendente(s)',
+                                      style: const TextStyle(color: Colors.white38, fontSize: 13),
+                                    ),
+                                  ],
                                 ),
                               ),
-                        const SliverToBoxAdapter(child: SizedBox(height: 100)),
-                      ],
-                    ),
-                  ),
-                  floatingActionButton: ScaleTransition(
-                    scale: _fabScale,
-                    child: FloatingActionButton.extended(
-                      heroTag: 'fab_nova_conta',
-                      onPressed: () => _showBillModal(uid, allBills),
-                      backgroundColor: const Color(0xFF6C63FF),
-                      foregroundColor: Colors.white,
-                      elevation: 8,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Nova Conta', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
+                            ),
+                            activeBills.isEmpty
+                                ? SliverFillRemaining(
+                                    hasScrollBody: false,
+                                    child: _buildEmptyState(uid, history.length),
+                                  )
+                                : SliverList(
+                                    delegate: SliverChildBuilderDelegate(
+                                      (_, i) => _buildBillCard(activeBills[i], uid),
+                                      childCount: activeBills.length,
+                                    ),
+                                  ),
+                            const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                          ],
+                        ),
+                      ),
+                      floatingActionButton: ScaleTransition(
+                        scale: _fabScale,
+                        child: FloatingActionButton.extended(
+                          heroTag: 'fab_nova_conta',
+                          onPressed: () => _showBillModal(uid),
+                          backgroundColor: const Color(0xFF6C63FF),
+                          foregroundColor: Colors.white,
+                          elevation: 8,
+                          icon: const Icon(Icons.add),
+                          label: const Text('Nova Conta', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    );
+                  },
                 );
               },
             );
@@ -1696,8 +1528,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildEmptyState(int totalBillsCount) {
-    final hasOtherMonths = !_showAllMonths && totalBillsCount > 0;
+  Widget _buildEmptyState(String uid, int historyCount) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
@@ -1707,26 +1538,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const Icon(Icons.receipt_long_outlined, size: 72, color: Color(0x1AFFFFFF)),
             const SizedBox(height: 16),
             Text(
-              hasOtherMonths
-                  ? 'Nenhuma conta em ${_formatMonthYear(_selectedMonth)}'
-                  : 'Nenhuma conta cadastrada',
+              historyCount > 0 ? 'Tudo pago por aqui!' : 'Nenhuma conta cadastrada',
               style: const TextStyle(color: Colors.white38, fontSize: 16),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              hasOtherMonths
-                  ? 'Você tem $totalBillsCount conta(s) em outros meses'
+              historyCount > 0
+                  ? 'Consulte as contas já pagas no Histórico ou adicione uma nova.'
                   : 'Toque em "Nova Conta" para começar',
               style: const TextStyle(color: Colors.white24, fontSize: 13),
               textAlign: TextAlign.center,
             ),
-            if (hasOtherMonths) ...[
+            if (historyCount > 0) ...[
               const SizedBox(height: 16),
               OutlinedButton.icon(
-                onPressed: () => setState(() => _showAllMonths = true),
-                icon: const Icon(Icons.list_alt_rounded, size: 18),
-                label: Text('Ver todas as contas ($totalBillsCount)'),
+                onPressed: () => _openHistory(uid),
+                icon: const Icon(Icons.history_rounded, size: 18),
+                label: Text('Ver Histórico ($historyCount)'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF9D97FF),
                   side: const BorderSide(color: Color(0x666C63FF)),
