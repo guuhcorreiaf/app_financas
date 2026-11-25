@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -14,13 +15,48 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+  static const List<String> _monthNames = [
+    'Janeiro',
+    'Fevereiro',
+    'Março',
+    'Abril',
+    'Maio',
+    'Junho',
+    'Julho',
+    'Agosto',
+    'Setembro',
+    'Outubro',
+    'Novembro',
+    'Dezembro',
+  ];
+
+  static const List<String> _shortMonthNames = [
+    'Jan',
+    'Fev',
+    'Mar',
+    'Abr',
+    'Mai',
+    'Jun',
+    'Jul',
+    'Ago',
+    'Set',
+    'Out',
+    'Nov',
+    'Dez',
+  ];
+
   final _currencyFmt = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   late final AnimationController _fabController;
   late final Animation<double> _fabScale;
 
+  late DateTime _selectedMonth;
+  bool _showAllMonths = false;
+
   @override
   void initState() {
     super.initState();
+    final now = DateTime.now();
+    _selectedMonth = DateTime(now.year, now.month);
     _fabController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
@@ -33,6 +69,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void dispose() {
     _fabController.dispose();
     super.dispose();
+  }
+
+  String _formatMonthYear(DateTime date) =>
+      '${_monthNames[date.month - 1]} ${date.year}';
+
+  String _formatShortMonthYear(DateTime date) =>
+      '${_shortMonthNames[date.month - 1]}/${date.year}';
+
+  void _changeMonth(int delta) {
+    setState(() {
+      _showAllMonths = false;
+      _selectedMonth = Bill.addMonths(_selectedMonth, delta);
+    });
+  }
+
+  double? _parseAmount(String? text) {
+    if (text == null) return null;
+    String cleaned = text.trim().replaceAll('R\$', '').replaceAll(' ', '');
+    if (cleaned.isEmpty) return null;
+
+    if (cleaned.contains('.') && cleaned.contains(',')) {
+      if (cleaned.lastIndexOf('.') < cleaned.lastIndexOf(',')) {
+        cleaned = cleaned.replaceAll('.', '').replaceAll(',', '.');
+      } else {
+        cleaned = cleaned.replaceAll(',', '');
+      }
+    } else if (cleaned.contains(',')) {
+      cleaned = cleaned.replaceAll('.', '').replaceAll(',', '.');
+    } else if (cleaned.contains('.')) {
+      final parts = cleaned.split('.');
+      if (parts.length == 2 && parts[1].length <= 2) {
+        // ponto decimal
+      } else {
+        cleaned = cleaned.replaceAll('.', '');
+      }
+    }
+    return double.tryParse(cleaned);
   }
 
   void _confirmSignOut() {
@@ -66,82 +139,103 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       text: currentSalary > 0 ? currentSalary.toStringAsFixed(2).replaceAll('.', ',') : '',
     );
     final formKey = GlobalKey<FormState>();
+    bool isSubmitting = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => StatefulBuilder(
-        builder: (ctx, setState) => Container(
+        builder: (ctx, setModalState) => Container(
           decoration: const BoxDecoration(
             color: Color(0xFF1E1E2E),
             borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
           ),
-          padding: EdgeInsets.only(
-            top: 24,
-            left: 24,
-            right: 24,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
-          ),
-          child: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+          child: SafeArea(
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: 24,
+                left: 24,
+                right: 24,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+              ),
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text('Definir Salário', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      const Text('Informe a sua renda ou salário mensal para calcular o saldo disponível.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                      const SizedBox(height: 20),
+                      _buildTextField(
+                        controller: salaryCtrl,
+                        label: 'Valor do Salário (R\$)',
+                        icon: Icons.account_balance_wallet_outlined,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return 'Informe o salário';
+                          final parsed = _parseAmount(v);
+                          if (parsed == null || parsed < 0) return 'Valor inválido';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 28),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: ElevatedButton(
+                          onPressed: isSubmitting
+                              ? null
+                              : () async {
+                                  if (!formKey.currentState!.validate()) return;
+                                  final val = _parseAmount(salaryCtrl.text);
+                                  if (val == null) return;
+                                  setModalState(() => isSubmitting = true);
+                                  try {
+                                    await Provider.of<FirestoreService>(context, listen: false).setSalary(uid, val);
+                                    if (ctx.mounted) Navigator.pop(ctx);
+                                  } catch (e) {
+                                    setModalState(() => isSubmitting = false);
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Erro ao atualizar salário: $e'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF6C63FF),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            elevation: 0,
+                          ),
+                          child: isSubmitting
+                              ? const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                )
+                              : const Text('Salvar Salário', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 24),
-                const Text('Definir Salário', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                const Text('Informe a sua renda ou salário mensal para calcular o saldo disponível.', style: TextStyle(color: Colors.white54, fontSize: 13)),
-                const SizedBox(height: 20),
-                _buildTextField(
-                  controller: salaryCtrl,
-                  label: 'Valor do Salário (R\$)',
-                  icon: Icons.account_balance_wallet_outlined,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Informe o salário';
-                    final parsed = double.tryParse(v.replaceAll('.', '').replaceAll(',', '.'));
-                    if (parsed == null || parsed < 0) return 'Valor inválido';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 28),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      if (!formKey.currentState!.validate()) return;
-                      final val = double.parse(salaryCtrl.text.replaceAll('.', '').replaceAll(',', '.'));
-                      try {
-                        await Provider.of<FirestoreService>(context, listen: false).setSalary(uid, val);
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      } catch (e) {
-                        if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            SnackBar(content: Text('Erro ao atualizar salário: $e')),
-                          );
-                        }
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6C63FF),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      elevation: 0,
-                    ),
-                    child: const Text('Salvar Salário', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -149,14 +243,219 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  // ========== Modal para Editar Reserva / Caixinha ==========
+  void _showEditSavingsModal(String uid, double currentSavings) {
+    final savingsCtrl = TextEditingController(
+      text: currentSavings > 0 ? currentSavings.toStringAsFixed(2).replaceAll('.', ',') : '',
+    );
+    final formKey = GlobalKey<FormState>();
+    bool isSubmitting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setModalState) => Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF1E1E2E),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: SafeArea(
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: 24,
+                left: 24,
+                right: 24,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+              ),
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Reserva de Emergência',
+                        style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Ajuste manualmente o valor total guardado na sua reserva/cofrinho.',
+                        style: TextStyle(color: Colors.white54, fontSize: 13),
+                      ),
+                      const SizedBox(height: 20),
+                      _buildTextField(
+                        controller: savingsCtrl,
+                        label: 'Valor Guardado (R\$)',
+                        icon: Icons.savings_outlined,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return 'Informe o valor';
+                          final parsed = _parseAmount(v);
+                          if (parsed == null || parsed < 0) return 'Valor inválido';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 28),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: ElevatedButton(
+                          onPressed: isSubmitting
+                              ? null
+                              : () async {
+                                  if (!formKey.currentState!.validate()) return;
+                                  final val = _parseAmount(savingsCtrl.text);
+                                  if (val == null) return;
+                                  setModalState(() => isSubmitting = true);
+                                  try {
+                                    await Provider.of<FirestoreService>(context, listen: false).setSavings(uid, val);
+                                    if (ctx.mounted) Navigator.pop(ctx);
+                                  } catch (e) {
+                                    setModalState(() => isSubmitting = false);
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Erro ao atualizar reserva: $e'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF6C63FF),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            elevation: 0,
+                          ),
+                          child: isSubmitting
+                              ? const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                )
+                              : const Text('Salvar Reserva', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========== Seletor de Mês ==========
+  Widget _buildMonthSelector() {
+    final now = DateTime.now();
+    final isCurrentMonth =
+        !_showAllMonths && _selectedMonth.year == now.year && _selectedMonth.month == now.month;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => _changeMonth(-1),
+            icon: const Icon(Icons.chevron_left_rounded, color: Colors.white70),
+            tooltip: 'Mês anterior',
+            visualDensity: VisualDensity.compact,
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _showAllMonths = false;
+                  _selectedMonth = DateTime(now.year, now.month);
+                });
+              },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _showAllMonths ? 'Todos os Meses' : _formatMonthYear(_selectedMonth),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  if (!isCurrentMonth && !_showAllMonths)
+                    const Text(
+                      'Toque para voltar ao mês atual',
+                      style: TextStyle(color: Color(0xFF6C63FF), fontSize: 10),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: () => _changeMonth(1),
+            icon: const Icon(Icons.chevron_right_rounded, color: Colors.white70),
+            tooltip: 'Próximo mês',
+            visualDensity: VisualDensity.compact,
+          ),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: () => setState(() => _showAllMonths = !_showAllMonths),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _showAllMonths ? const Color(0xFF6C63FF) : Colors.white10,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                _showAllMonths ? 'Por mês' : 'Todos',
+                style: TextStyle(
+                  color: _showAllMonths ? Colors.white : Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ========== UI Helpers ===========
-  Widget _buildHeader(User user, String uid, double salary, double totalPending, double balance) {
+  Widget _buildHeader({
+    required User user,
+    required String uid,
+    required double salary,
+    required double totalPaid,
+    required double totalPending,
+    required double currentBalance,
+    required double projectedFinalBalance,
+  }) {
     final userLabel = user.isAnonymous
         ? 'Usuário Anônimo'
         : (user.email ?? 'Minha Conta');
 
     return Container(
-      margin: const EdgeInsets.all(20),
+      margin: const EdgeInsets.fromLTRB(20, 14, 20, 16),
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -208,15 +507,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
           const SizedBox(height: 18),
-          const Text('Saldo disponível', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          Text(
+            _showAllMonths
+                ? 'Saldo Atual Disponível (Geral)'
+                : 'Saldo Disponível — ${_formatShortMonthYear(_selectedMonth)}',
+            style: const TextStyle(color: Colors.white70, fontSize: 13),
+          ),
           const SizedBox(height: 4),
           Text(
-            _currencyFmt.format(balance),
+            _currencyFmt.format(currentBalance),
             style: TextStyle(
-              color: balance >= 0 ? Colors.white : Colors.red.shade200,
+              color: currentBalance >= 0 ? Colors.white : Colors.red.shade200,
               fontSize: 32,
               fontWeight: FontWeight.bold,
             ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Text('Previsão Livre Final: ', style: TextStyle(color: Colors.white60, fontSize: 12)),
+              Text(
+                _currencyFmt.format(projectedFinalBalance),
+                style: TextStyle(
+                  color: projectedFinalBalance >= 0 ? Colors.white70 : Colors.red.shade200,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 18),
           Row(
@@ -228,12 +546,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 onTap: () => _showEditSalaryModal(uid, salary),
                 showEditIcon: true,
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               _buildStat(
-                icon: Icons.receipt_long_outlined,
+                icon: Icons.schedule_rounded,
                 label: 'A pagar',
                 value: _currencyFmt.format(totalPending),
-                valueColor: Colors.red.shade200,
+                valueColor: Colors.orange.shade200,
+              ),
+              const SizedBox(width: 8),
+              _buildStat(
+                icon: Icons.check_circle_outline,
+                label: 'Pago',
+                value: _currencyFmt.format(totalPaid),
+                valueColor: Colors.green.shade200,
               ),
             ],
           ),
@@ -254,7 +579,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
           decoration: BoxDecoration(
             color: Colors.white12,
             borderRadius: BorderRadius.circular(14),
@@ -266,21 +591,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      Icon(icon, color: Colors.white70, size: 16),
-                      const SizedBox(width: 6),
-                      Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                    ],
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Icon(icon, color: Colors.white70, size: 14),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: const TextStyle(color: Colors.white70, fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   if (showEditIcon)
-                    const Icon(Icons.edit_outlined, color: Colors.white54, size: 14),
+                    const Icon(Icons.edit_outlined, color: Colors.white54, size: 12),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                value,
-                style: TextStyle(color: valueColor ?? Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+              const SizedBox(height: 4),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  value,
+                  style: TextStyle(color: valueColor ?? Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                ),
               ),
             ],
           ),
@@ -289,155 +626,687 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // ========== Modal para Criar ou Editar Conta ===========
-  void _showBillModal(String uid, {Bill? billToEdit}) {
-    final isEditing = billToEdit != null;
-    final titleCtrl = TextEditingController(text: isEditing ? billToEdit.title : '');
-    final amountCtrl = TextEditingController(
-      text: isEditing ? billToEdit.amount.toStringAsFixed(2).replaceAll('.', ',') : '',
-    );
-    DateTime selectedDate = isEditing ? billToEdit.dueDate : DateTime.now().add(const Duration(days: 7));
-    bool isRecurring = isEditing ? billToEdit.isRecurring : false;
-    final formKey = GlobalKey<FormState>();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setState) => Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFF1E1E2E),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+  // ========== Card Dedicado para Reserva de Emergência (Caixinha) ==========
+  Widget _buildSavingsCard({
+    required String uid,
+    required double savings,
+    required double suggestedReserve,
+    required double projectedLeftover,
+  }) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E2E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0x336C63FF), width: 1.2),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1A000000),
+            blurRadius: 16,
+            offset: Offset(0, 6),
           ),
-          padding: EdgeInsets.only(
-            top: 24,
-            left: 24,
-            right: 24,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
-          ),
-          child: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)))),
-                const SizedBox(height: 24),
-                Text(
-                  isEditing ? 'Editar Conta' : 'Nova Conta',
-                  style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 20),
-                _buildTextField(
-                  controller: titleCtrl,
-                  label: 'Descrição',
-                  icon: Icons.description_outlined,
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Informe a descrição' : null,
-                ),
-                const SizedBox(height: 16),
-                _buildTextField(
-                  controller: amountCtrl,
-                  label: 'Valor (R\$)',
-                  icon: Icons.attach_money,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Informe o valor';
-                    final parsed = double.tryParse(v.replaceAll('.', '').replaceAll(',', '.'));
-                    if (parsed == null || parsed <= 0) return 'Valor inválido';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                GestureDetector(
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: ctx,
-                      initialDate: selectedDate,
-                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
-                      builder: (c, child) => Theme(
-                        data: ThemeData.dark().copyWith(
-                          colorScheme: const ColorScheme.dark(primary: Color(0xFF6C63FF), surface: Color(0xFF1E1E2E)),
-                        ),
-                        child: child!,
-                      ),
-                    );
-                    if (picked != null) setState(() => selectedDate = picked);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                    decoration: BoxDecoration(color: const Color(0xFF2A2A3E), borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.white12)),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.calendar_today_outlined, color: Color(0xFF6C63FF), size: 20),
-                        const SizedBox(width: 12),
-                        Text('Vencimento: ${DateFormat('dd/MM/yyyy').format(selectedDate)}', style: const TextStyle(color: Colors.white70, fontSize: 15)),
-                      ],
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0x266C63FF),
+                      borderRadius: BorderRadius.circular(12),
                     ),
+                    child: const Icon(Icons.savings_outlined, color: Color(0xFF6C63FF), size: 24),
                   ),
+                  const SizedBox(width: 12),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Reserva de Emergência',
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        'Cofrinho / Guardado',
+                        style: TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              IconButton(
+                onPressed: () => _showEditSavingsModal(uid, savings),
+                icon: const Icon(Icons.edit_outlined, color: Colors.white54, size: 20),
+                tooltip: 'Editar Reserva',
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                _currencyFmt.format(savings),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
                 ),
-                const SizedBox(height: 16),
-                SwitchListTile(
-                  title: const Text('Recorrente Mensal', style: TextStyle(color: Colors.white70)),
-                  value: isRecurring,
-                  activeColor: const Color(0xFF6C63FF),
-                  onChanged: (v) => setState(() => isRecurring = v),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'guardados',
+                style: TextStyle(color: Colors.white38, fontSize: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: projectedLeftover > 0 ? const Color(0x1F10B981) : const Color(0x1FF59E0B),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: projectedLeftover > 0 ? const Color(0x6610B981) : const Color(0x66F59E0B),
+                width: 0.8,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  projectedLeftover > 0 ? Icons.lightbulb_outline : Icons.info_outline,
+                  color: projectedLeftover > 0 ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                  size: 18,
                 ),
-                const SizedBox(height: 28),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      if (!formKey.currentState!.validate()) return;
-                      final amountVal = double.parse(amountCtrl.text.replaceAll('.', '').replaceAll(',', '.'));
-                      final bill = Bill(
-                        id: isEditing ? billToEdit.id : DateTime.now().millisecondsSinceEpoch.toString(),
-                        title: titleCtrl.text.trim(),
-                        amount: amountVal,
-                        dueDate: selectedDate,
-                        isPaid: isEditing ? billToEdit.isPaid : false,
-                        isRecurring: isRecurring,
-                        category: isEditing ? billToEdit.category : 'Outros',
-                      );
-                      try {
-                        final firestore = Provider.of<FirestoreService>(context, listen: false);
-                        if (isEditing) {
-                          await firestore.updateBill(uid, bill);
-                        } else {
-                          await firestore.addBill(uid, bill);
-                        }
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      } catch (e) {
-                        if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            SnackBar(content: Text('Erro ao salvar conta: $e')),
-                          );
-                        }
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6C63FF),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      elevation: 0,
-                    ),
-                    child: Text(
-                      isEditing ? 'Atualizar Conta' : 'Salvar Conta',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    projectedLeftover > 0
+                        ? 'Sugestão do mês: Guardar 10% da sobra (${_currencyFmt.format(suggestedReserve)})'
+                        : 'Sem sobra prevista neste mês para guardar.',
+                    style: TextStyle(
+                      color: projectedLeftover > 0 ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-        ),
+          if (suggestedReserve > 0) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  try {
+                    final firestore = Provider.of<FirestoreService>(context, listen: false);
+                    final newTotal = savings + suggestedReserve;
+                    await firestore.setSavings(uid, newTotal);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Guardado ${_currencyFmt.format(suggestedReserve)} na reserva!'),
+                          backgroundColor: const Color(0xFF10B981),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Erro ao atualizar reserva: $e'), backgroundColor: Colors.red),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.add_circle_outline, size: 18),
+                label: Text(
+                  'Aplicar 10% (${_currencyFmt.format(suggestedReserve)})',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6C63FF),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 0,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
 
-  Widget _buildBillCard(Bill bill, String uid) {
+  // ========== Modal para Criar ou Editar Conta ===========
+  void _showBillModal(String uid, List<Bill> allBills, {Bill? billToEdit}) {
+    final isEditing = billToEdit != null;
+    final titleCtrl = TextEditingController(text: isEditing ? billToEdit.title : '');
+    final amountCtrl = TextEditingController(
+      text: isEditing ? billToEdit.amount.toStringAsFixed(2).replaceAll('.', ',') : '',
+    );
+
+    final now = DateTime.now();
+    DateTime defaultNewDate = DateTime.now().add(const Duration(days: 7));
+    if (!_showAllMonths &&
+        (_selectedMonth.year != now.year || _selectedMonth.month != now.month)) {
+      final lastDay = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0).day;
+      final day = now.day > lastDay ? lastDay : now.day;
+      defaultNewDate = DateTime(_selectedMonth.year, _selectedMonth.month, day);
+    }
+
+    DateTime selectedDate = isEditing ? billToEdit.dueDate : defaultNewDate;
+    bool isRecurring = isEditing ? billToEdit.isRecurring : false;
+    int additionalMonths = 3;
+    final repeatCtrl = TextEditingController(text: '$additionalMonths');
+
+    // Para edição de contas que já pertencem a uma série recorrente
+    final futureSameGroupBills = (isEditing && billToEdit.recurrenceGroupId != null)
+        ? allBills
+            .where((b) =>
+                b.id != billToEdit.id &&
+                b.recurrenceGroupId == billToEdit.recurrenceGroupId &&
+                !b.dueDate.isBefore(billToEdit.dueDate))
+            .toList()
+        : <Bill>[];
+    bool updateFutureInSeries = false;
+
+    final formKey = GlobalKey<FormState>();
+    bool isSubmitting = false;
+
+    final canGenerateFutureMonths = !isEditing || !billToEdit.isRecurring;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          void setRepeats(int value) {
+            final clamped = value.clamp(1, 60);
+            setModalState(() {
+              additionalMonths = clamped;
+              repeatCtrl.text = '$clamped';
+              repeatCtrl.selection = TextSelection.fromPosition(
+                TextPosition(offset: repeatCtrl.text.length),
+              );
+            });
+          }
+
+          final previewDates = List.generate(
+            1 + additionalMonths,
+            (i) => Bill.addMonths(selectedDate, i),
+          );
+
+          final showRecurrenceSetup = isRecurring && canGenerateFutureMonths;
+
+          String submitButtonLabel() {
+            if (showRecurrenceSetup) {
+              if (isEditing) {
+                return 'Atualizar e Gerar +$additionalMonths ${additionalMonths == 1 ? 'mês' : 'meses'}';
+              }
+              return 'Salvar ${1 + additionalMonths} Contas';
+            }
+            return isEditing ? 'Atualizar Conta' : 'Salvar Conta';
+          }
+
+          return Container(
+            decoration: const BoxDecoration(
+              color: Color(0xFF1E1E2E),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+            ),
+            child: SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  top: 24,
+                  left: 24,
+                  right: 24,
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+                ),
+                child: SingleChildScrollView(
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              isEditing ? 'Editar Conta' : 'Nova Conta',
+                              style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                            ),
+                            if (isEditing &&
+                                billToEdit.installmentIndex != null &&
+                                billToEdit.installmentTotal != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x266C63FF),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  'Parcela ${billToEdit.installmentIndex}/${billToEdit.installmentTotal}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF9D97FF),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        _buildTextField(
+                          controller: titleCtrl,
+                          label: 'Descrição',
+                          icon: Icons.description_outlined,
+                          validator: (v) => v == null || v.trim().isEmpty ? 'Informe a descrição' : null,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildTextField(
+                          controller: amountCtrl,
+                          label: 'Valor (R\$)',
+                          icon: Icons.attach_money,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) return 'Informe o valor';
+                            final parsed = _parseAmount(v);
+                            if (parsed == null || parsed <= 0) return 'Valor inválido';
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        GestureDetector(
+                          onTap: () async {
+                            final picked = await showDatePicker(
+                              context: ctx,
+                              initialDate: selectedDate,
+                              firstDate: DateTime.now().subtract(const Duration(days: 365 * 2)),
+                              lastDate: DateTime.now().add(const Duration(days: 365 * 10)),
+                              builder: (c, child) => Theme(
+                                data: ThemeData.dark().copyWith(
+                                  colorScheme: const ColorScheme.dark(primary: Color(0xFF6C63FF), surface: Color(0xFF1E1E2E)),
+                                ),
+                                child: child!,
+                              ),
+                            );
+                            if (picked != null) setModalState(() => selectedDate = picked);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2A2A3E),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.calendar_today_outlined, color: Color(0xFF6C63FF), size: 20),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'Vencimento: ${DateFormat('dd/MM/yyyy').format(selectedDate)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 15),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Recorrente Mensal', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+                          subtitle: Text(
+                            canGenerateFutureMonths
+                                ? 'Cria automaticamente esta conta nos próximos meses'
+                                : 'Conta faz parte de uma recorrência mensal',
+                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          ),
+                          value: isRecurring,
+                          activeThumbColor: const Color(0xFF6C63FF),
+                          onChanged: canGenerateFutureMonths
+                              ? (v) => setModalState(() => isRecurring = v)
+                              : null,
+                        ),
+
+                        // ========== Configuração de Repetições Mensais ==========
+                        if (showRecurrenceSetup) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF252538),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0x4D6C63FF)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Repetir por mais quantos meses?',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      onPressed: additionalMonths > 1
+                                          ? () => setRepeats(additionalMonths - 1)
+                                          : null,
+                                      icon: const Icon(Icons.remove_circle_outline),
+                                      color: const Color(0xFF6C63FF),
+                                      disabledColor: Colors.white24,
+                                    ),
+                                    Expanded(
+                                      child: TextFormField(
+                                        controller: repeatCtrl,
+                                        textAlign: TextAlign.center,
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          FilteringTextInputFormatter.digitsOnly,
+                                          LengthLimitingTextInputFormatter(2),
+                                        ],
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                                          filled: true,
+                                          fillColor: const Color(0xFF1E1E2E),
+                                          suffixText: additionalMonths == 1 ? 'mês' : 'meses',
+                                          suffixStyle: const TextStyle(color: Colors.white54, fontSize: 13),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                            borderSide: const BorderSide(color: Colors.white12),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                            borderSide: const BorderSide(color: Color(0xFF6C63FF), width: 1.5),
+                                          ),
+                                        ),
+                                        onChanged: (v) {
+                                          final parsed = int.tryParse(v);
+                                          if (parsed != null && parsed >= 1 && parsed <= 60) {
+                                            setModalState(() => additionalMonths = parsed);
+                                          }
+                                        },
+                                        validator: (v) {
+                                          final parsed = int.tryParse(v ?? '');
+                                          if (parsed == null || parsed < 1 || parsed > 60) {
+                                            return 'Informe entre 1 e 60';
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                    ),
+                                    IconButton(
+                                      onPressed: additionalMonths < 60
+                                          ? () => setRepeats(additionalMonths + 1)
+                                          : null,
+                                      icon: const Icon(Icons.add_circle_outline),
+                                      color: const Color(0xFF6C63FF),
+                                      disabledColor: Colors.white24,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 6,
+                                  children: [1, 3, 6, 11, 12].map((preset) {
+                                    final isSelected = additionalMonths == preset;
+                                    return ChoiceChip(
+                                      label: Text('+$preset${preset == 1 ? ' mês' : 'x'}'),
+                                      selected: isSelected,
+                                      onSelected: (_) => setRepeats(preset),
+                                      selectedColor: const Color(0xFF6C63FF),
+                                      backgroundColor: const Color(0xFF1E1E2E),
+                                      labelStyle: TextStyle(
+                                        color: isSelected ? Colors.white : Colors.white70,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      side: BorderSide(
+                                        color: isSelected ? const Color(0xFF6C63FF) : Colors.white12,
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                    );
+                                  }).toList(),
+                                ),
+                                const SizedBox(height: 12),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0x1A6C63FF),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.event_repeat_rounded, color: Color(0xFF9D97FF), size: 16),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              'Total: ${previewDates.length} contas (${_formatShortMonthYear(previewDates.first)} a ${_formatShortMonthYear(previewDates.last)})',
+                                              style: const TextStyle(
+                                                color: Color(0xFFC4BFFF),
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 6,
+                                        children: [
+                                          ...previewDates.take(5).map((d) => Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF1E1E2E),
+                                                  borderRadius: BorderRadius.circular(8),
+                                                  border: Border.all(color: Colors.white12),
+                                                ),
+                                                child: Text(
+                                                  DateFormat('dd/MM/yy').format(d),
+                                                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                                ),
+                                              )),
+                                          if (previewDates.length > 5)
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0x336C63FF),
+                                                borderRadius: BorderRadius.circular(8),
+                                              ),
+                                              child: Text(
+                                                '+${previewDates.length - 5} até ${DateFormat('dd/MM/yy').format(previewDates.last)}',
+                                                style: const TextStyle(color: Color(0xFFC4BFFF), fontSize: 11),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+
+                        if (isEditing && futureSameGroupBills.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: updateFutureInSeries,
+                            activeColor: const Color(0xFF6C63FF),
+                            onChanged: (v) => setModalState(() => updateFutureInSeries = v ?? false),
+                            title: Text(
+                              'Atualizar descrição e valor nas próximas ${futureSameGroupBills.length} conta(s)',
+                              style: const TextStyle(color: Colors.white70, fontSize: 13),
+                            ),
+                            controlAffinity: ListTileControlAffinity.leading,
+                          ),
+                        ],
+
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 52,
+                          child: ElevatedButton(
+                            onPressed: isSubmitting
+                                ? null
+                                : () async {
+                                    if (!formKey.currentState!.validate()) return;
+                                    final amountVal = _parseAmount(amountCtrl.text);
+                                    if (amountVal == null) return;
+                                    setModalState(() => isSubmitting = true);
+
+                                    final firestore = Provider.of<FirestoreService>(context, listen: false);
+                                    final trimmedTitle = titleCtrl.text.trim();
+
+                                    try {
+                                      if (showRecurrenceSetup) {
+                                        final repeats = int.tryParse(repeatCtrl.text) ?? additionalMonths;
+                                        final baseId = DateTime.now().millisecondsSinceEpoch.toString();
+                                        final series = Bill.generateRecurringSeries(
+                                          baseId: baseId,
+                                          title: trimmedTitle,
+                                          amount: amountVal,
+                                          startDate: selectedDate,
+                                          additionalMonths: repeats,
+                                          isPaidFirst: isEditing ? billToEdit.isPaid : false,
+                                          category: isEditing ? billToEdit.category : 'Outros',
+                                          existingFirstId: isEditing ? billToEdit.id : null,
+                                        );
+                                        await firestore.addBills(uid, series);
+
+                                        if (!_showAllMonths && mounted) {
+                                          setState(() {
+                                            _selectedMonth = DateTime(selectedDate.year, selectedDate.month);
+                                          });
+                                        }
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                '${series.length} contas salvas (${_formatShortMonthYear(series.first.dueDate)} a ${_formatShortMonthYear(series.last.dueDate)})!',
+                                              ),
+                                              backgroundColor: const Color(0xFF10B981),
+                                            ),
+                                          );
+                                        }
+                                      } else if (isEditing) {
+                                        final updatedBill = billToEdit.copyWith(
+                                          title: trimmedTitle,
+                                          amount: amountVal,
+                                          dueDate: selectedDate,
+                                          isRecurring: isRecurring,
+                                        );
+                                        if (updateFutureInSeries && futureSameGroupBills.isNotEmpty) {
+                                          final toUpdate = <Bill>[
+                                            updatedBill,
+                                            ...futureSameGroupBills.map(
+                                              (b) => b.copyWith(title: trimmedTitle, amount: amountVal),
+                                            ),
+                                          ];
+                                          await firestore.updateBills(uid, toUpdate);
+                                        } else {
+                                          await firestore.updateBill(uid, updatedBill);
+                                        }
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                      } else {
+                                        final bill = Bill(
+                                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                          title: trimmedTitle,
+                                          amount: amountVal,
+                                          dueDate: selectedDate,
+                                          isPaid: false,
+                                          isRecurring: false,
+                                          category: 'Outros',
+                                        );
+                                        await firestore.addBill(uid, bill);
+                                        if (!_showAllMonths && mounted) {
+                                          setState(() {
+                                            _selectedMonth = DateTime(selectedDate.year, selectedDate.month);
+                                          });
+                                        }
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                      }
+                                    } catch (e) {
+                                      setModalState(() => isSubmitting = false);
+                                      if (mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Erro ao salvar conta: $e'),
+                                            backgroundColor: Colors.red,
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF6C63FF),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              elevation: 0,
+                            ),
+                            child: isSubmitting
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                  )
+                                : Text(
+                                    submitButtonLabel(),
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBillCard(Bill bill, String uid, List<Bill> allBills) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final billDate = DateTime(bill.dueDate.year, bill.dueDate.month, bill.dueDate.day);
@@ -450,10 +1319,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     Color subtitleColor;
 
     if (bill.isPaid) {
-      subtitleText = 'Pago ✓';
+      subtitleText = 'Pago ✓ — ${DateFormat('dd/MM/yyyy').format(bill.dueDate)}';
       subtitleColor = Colors.white24;
     } else if (isOverdue) {
-      subtitleText = 'Venceu em ${DateFormat('dd/MM').format(bill.dueDate)}';
+      subtitleText = 'Venceu em ${DateFormat('dd/MM/yyyy').format(bill.dueDate)}';
       subtitleColor = Colors.red.shade300;
     } else if (isToday) {
       subtitleText = 'Vence hoje!';
@@ -463,29 +1332,63 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       subtitleColor = daysLeft <= 3 ? Colors.orange.shade300 : Colors.white38;
     }
 
+    final futureSameGroup = bill.recurrenceGroupId != null
+        ? allBills
+            .where((b) =>
+                b.recurrenceGroupId == bill.recurrenceGroupId &&
+                !b.dueDate.isBefore(bill.dueDate))
+            .toList()
+        : <Bill>[];
+
+    List<String> idsToDelete = [bill.id];
+
     return Dismissible(
       key: Key(bill.id),
       direction: DismissDirection.endToStart,
       confirmDismiss: (direction) async {
-        return await showDialog<bool>(
+        final hasFutureGroup = futureSameGroup.length > 1;
+        final result = await showDialog<String>(
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF1E1E2E),
             title: const Text('Excluir conta', style: TextStyle(color: Colors.white)),
-            content: Text('Deseja excluir "${bill.title}"?', style: const TextStyle(color: Colors.white70)),
+            content: Text(
+              hasFutureGroup
+                  ? 'Deseja excluir apenas "${bill.title}" (${DateFormat('dd/MM/yyyy').format(bill.dueDate)}) ou também as próximas ${futureSameGroup.length - 1} repetições?'
+                  : 'Deseja excluir "${bill.title}"?',
+              style: const TextStyle(color: Colors.white70),
+            ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
+                onPressed: () => Navigator.pop(ctx, 'cancel'),
                 child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
               ),
+              if (hasFutureGroup)
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, 'future'),
+                  child: Text(
+                    'Esta e futuras (${futureSameGroup.length})',
+                    style: TextStyle(color: Colors.red.shade300, fontWeight: FontWeight.bold),
+                  ),
+                ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Excluir', style: TextStyle(color: Colors.white)),
+                onPressed: () => Navigator.pop(ctx, 'single'),
+                child: Text(hasFutureGroup ? 'Só esta' : 'Excluir', style: const TextStyle(color: Colors.white)),
               ),
             ],
           ),
-        ) ?? false;
+        );
+
+        if (result == 'future') {
+          idsToDelete = futureSameGroup.map((b) => b.id).toList();
+          return true;
+        }
+        if (result == 'single') {
+          idsToDelete = [bill.id];
+          return true;
+        }
+        return false;
       },
       background: Container(
         alignment: Alignment.centerRight,
@@ -494,7 +1397,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         decoration: BoxDecoration(color: Colors.red.shade900, borderRadius: BorderRadius.circular(18)),
         child: const Icon(Icons.delete_outline, color: Colors.white, size: 26),
       ),
-      onDismissed: (_) => Provider.of<FirestoreService>(context, listen: false).deleteBill(uid, bill.id),
+      onDismissed: (_) => Provider.of<FirestoreService>(context, listen: false).deleteBills(uid, idsToDelete),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
         decoration: BoxDecoration(
@@ -507,7 +1410,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
         ),
         child: ListTile(
-          onTap: () => _showBillModal(uid, billToEdit: bill),
+          onTap: () => _showBillModal(uid, allBills, billToEdit: bill),
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           leading: Container(
             width: 46,
@@ -534,15 +1437,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               size: 22,
             ),
           ),
-          title: Text(
-            bill.title,
-            style: TextStyle(
-              color: bill.isPaid ? Colors.white38 : Colors.white,
-              fontWeight: FontWeight.w600,
-              fontSize: 15,
-              decoration: bill.isPaid ? TextDecoration.lineThrough : null,
-              decorationColor: Colors.white38,
-            ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  bill.title,
+                  style: TextStyle(
+                    color: bill.isPaid ? Colors.white38 : Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    decoration: bill.isPaid ? TextDecoration.lineThrough : null,
+                    decorationColor: Colors.white38,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (bill.isRecurring) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0x266C63FF),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.repeat_rounded, color: Color(0xFF9D97FF), size: 11),
+                      const SizedBox(width: 3),
+                      Text(
+                        bill.installmentIndex != null && bill.installmentTotal != null
+                            ? '${bill.installmentIndex}/${bill.installmentTotal}'
+                            : 'Fixa',
+                        style: const TextStyle(
+                          color: Color(0xFF9D97FF),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ),
           subtitle: Padding(
             padding: const EdgeInsets.only(top: 3),
@@ -636,55 +1573,122 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       stream: firestore.salaryStream(uid),
       builder: (c, salarySnap) {
         final salary = salarySnap.data ?? 0.0;
-        return StreamBuilder<List<Bill>>(
-          stream: firestore.billsStream(uid),
-          builder: (c2, billsSnap) {
-            final bills = billsSnap.data ?? [];
-            final totalPending = bills.where((b) => !b.isPaid).fold(0.0, (s, b) => s + b.amount);
-            final balance = salary - totalPending;
-
-            return Scaffold(
-              backgroundColor: const Color(0xFF12121C),
-              body: SafeArea(
-                child: CustomScrollView(
-                  slivers: [
-                    SliverToBoxAdapter(child: _buildHeader(user, uid, salary, totalPending, balance)),
-                    SliverToBoxAdapter(
+        return StreamBuilder<double>(
+          stream: firestore.savingsStream(uid),
+          builder: (cSavings, savingsSnap) {
+            final savings = savingsSnap.data ?? 0.0;
+            return StreamBuilder<List<Bill>>(
+              stream: firestore.billsStream(uid),
+              builder: (cBills, billsSnap) {
+                if (billsSnap.hasError) {
+                  return Scaffold(
+                    backgroundColor: const Color(0xFF12121C),
+                    body: Center(
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('Suas Contas', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                            Text('${bills.length} item(s)', style: const TextStyle(color: Colors.white38, fontSize: 13)),
-                          ],
+                        padding: const EdgeInsets.all(24.0),
+                        child: Text(
+                          'Erro ao carregar contas do Firebase: ${billsSnap.error}',
+                          style: const TextStyle(color: Colors.redAccent, fontSize: 14),
+                          textAlign: TextAlign.center,
                         ),
                       ),
                     ),
-                    bills.isEmpty
-                        ? SliverFillRemaining(child: _buildEmptyState())
-                        : SliverList(
-                            delegate: SliverChildBuilderDelegate(
-                              (_, i) => _buildBillCard(bills[i], uid),
-                              childCount: bills.length,
+                  );
+                }
+
+                final allBills = billsSnap.data ?? [];
+                final visibleBills = _showAllMonths
+                    ? allBills
+                    : allBills
+                        .where((b) =>
+                            b.dueDate.year == _selectedMonth.year &&
+                            b.dueDate.month == _selectedMonth.month)
+                        .toList();
+
+                final totalPaid = visibleBills.where((b) => b.isPaid).fold(0.0, (s, b) => s + b.amount);
+                final totalPending = visibleBills.where((b) => !b.isPaid).fold(0.0, (s, b) => s + b.amount);
+
+                // Regras de negócio:
+                final projectedLeftover = salary - (totalPaid + totalPending);
+                final suggestedReserve = projectedLeftover > 0 ? (projectedLeftover * 0.10) : 0.0;
+
+                final currentBalance = salary - totalPaid - savings;
+                final projectedFinalBalance = salary - (totalPaid + totalPending) - savings;
+
+                return Scaffold(
+                  backgroundColor: const Color(0xFF12121C),
+                  body: SafeArea(
+                    child: CustomScrollView(
+                      slivers: [
+                        SliverToBoxAdapter(child: _buildMonthSelector()),
+                        SliverToBoxAdapter(
+                          child: _buildHeader(
+                            user: user,
+                            uid: uid,
+                            salary: salary,
+                            totalPaid: totalPaid,
+                            totalPending: totalPending,
+                            currentBalance: currentBalance,
+                            projectedFinalBalance: projectedFinalBalance,
+                          ),
+                        ),
+                        SliverToBoxAdapter(
+                          child: _buildSavingsCard(
+                            uid: uid,
+                            savings: savings,
+                            suggestedReserve: suggestedReserve,
+                            projectedLeftover: projectedLeftover,
+                          ),
+                        ),
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _showAllMonths
+                                      ? 'Todas as Contas'
+                                      : 'Contas de ${_formatShortMonthYear(_selectedMonth)}',
+                                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  '${visibleBills.length} item(s)',
+                                  style: const TextStyle(color: Colors.white38, fontSize: 13),
+                                ),
+                              ],
                             ),
                           ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 100)),
-                  ],
-                ),
-              ),
-              floatingActionButton: ScaleTransition(
-                scale: _fabScale,
-                child: FloatingActionButton.extended(
-                  heroTag: 'fab_nova_conta',
-                  onPressed: () => _showBillModal(uid),
-                  backgroundColor: const Color(0xFF6C63FF),
-                  foregroundColor: Colors.white,
-                  elevation: 8,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Nova Conta', style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
-              ),
+                        ),
+                        visibleBills.isEmpty
+                            ? SliverFillRemaining(
+                                hasScrollBody: false,
+                                child: _buildEmptyState(allBills.length),
+                              )
+                            : SliverList(
+                                delegate: SliverChildBuilderDelegate(
+                                  (_, i) => _buildBillCard(visibleBills[i], uid, allBills),
+                                  childCount: visibleBills.length,
+                                ),
+                              ),
+                        const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                      ],
+                    ),
+                  ),
+                  floatingActionButton: ScaleTransition(
+                    scale: _fabScale,
+                    child: FloatingActionButton.extended(
+                      heroTag: 'fab_nova_conta',
+                      onPressed: () => _showBillModal(uid, allBills),
+                      backgroundColor: const Color(0xFF6C63FF),
+                      foregroundColor: Colors.white,
+                      elevation: 8,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Nova Conta', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                );
+              },
             );
           },
         );
@@ -692,17 +1696,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(int totalBillsCount) {
+    final hasOtherMonths = !_showAllMonths && totalBillsCount > 0;
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
-          Icon(Icons.receipt_long_outlined, size: 72, color: Color(0x1AFFFFFF)),
-          SizedBox(height: 16),
-          Text('Nenhuma conta cadastrada', style: TextStyle(color: Colors.white38, fontSize: 16)),
-          SizedBox(height: 8),
-          Text('Toque em "Nova Conta" para começar', style: TextStyle(color: Colors.white24, fontSize: 13)),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.receipt_long_outlined, size: 72, color: Color(0x1AFFFFFF)),
+            const SizedBox(height: 16),
+            Text(
+              hasOtherMonths
+                  ? 'Nenhuma conta em ${_formatMonthYear(_selectedMonth)}'
+                  : 'Nenhuma conta cadastrada',
+              style: const TextStyle(color: Colors.white38, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasOtherMonths
+                  ? 'Você tem $totalBillsCount conta(s) em outros meses'
+                  : 'Toque em "Nova Conta" para começar',
+              style: const TextStyle(color: Colors.white24, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            if (hasOtherMonths) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () => setState(() => _showAllMonths = true),
+                icon: const Icon(Icons.list_alt_rounded, size: 18),
+                label: Text('Ver todas as contas ($totalBillsCount)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF9D97FF),
+                  side: const BorderSide(color: Color(0x666C63FF)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

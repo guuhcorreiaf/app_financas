@@ -20,13 +20,46 @@ class FirestoreService {
     });
   }
 
+  // ── Reserva / Caixinha ──
+  Future<void> setSavings(String uid, double savings) async {
+    await _userDoc(uid).set({'savings': savings}, SetOptions(merge: true));
+  }
+
+  Stream<double> savingsStream(String uid) {
+    return _userDoc(uid).snapshots().map((snap) {
+      final data = snap.data();
+      if (data == null) return 0.0;
+      return (data['savings'] as num?)?.toDouble() ?? 0.0;
+    });
+  }
+
   // ── Contas CRUD ──
   Future<void> addBill(String uid, Bill bill) async {
     await _userDoc(uid).collection('bills').doc(bill.id).set(bill.toJson());
   }
 
+  Future<void> addBills(String uid, List<Bill> bills) async {
+    if (bills.isEmpty) return;
+    final batch = _db.batch();
+    final col = _userDoc(uid).collection('bills');
+    for (final bill in bills) {
+      batch.set(col.doc(bill.id), bill.toJson());
+    }
+    await batch.commit();
+  }
+
   Future<void> updateBill(String uid, Bill bill) async {
     await _userDoc(uid).collection('bills').doc(bill.id).update(bill.toJson());
+  }
+
+  Future<void> updateBills(String uid, List<Bill> bills) async {
+    if (bills.isEmpty) return;
+    final batch = _db.batch();
+    final col = _userDoc(uid).collection('bills');
+    for (final bill in bills) {
+      batch.set(col.doc(bill.id), bill.toJson(), SetOptions(merge: true));
+    }
+    await batch.commit();
   }
 
   Future<void> toggleBillStatus(String uid, String billId, bool isPaid) async {
@@ -38,6 +71,16 @@ class FirestoreService {
 
   Future<void> deleteBill(String uid, String billId) async {
     await _userDoc(uid).collection('bills').doc(billId).delete();
+  }
+
+  Future<void> deleteBills(String uid, List<String> billIds) async {
+    if (billIds.isEmpty) return;
+    final batch = _db.batch();
+    final col = _userDoc(uid).collection('bills');
+    for (final id in billIds) {
+      batch.delete(col.doc(id));
+    }
+    await batch.commit();
   }
 
   Stream<List<Bill>> billsStream(String uid) {

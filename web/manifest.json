@@ -1,11 +1,11 @@
 {
-    "name": "app_financas",
-    "short_name": "app_financas",
+    "name": "Controle Financeiro",
+    "short_name": "Finanças",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#12121C",
+    "theme_color": "#6C63FF",
+    "description": "App de controle financeiro pessoal com contas recorrentes e reserva de emergência.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
