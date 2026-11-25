@@ -1,11 +1,11 @@
 {
-    "name": "Controle Financeiro",
+    "name": "Finanças.app — Controle Financeiro",
     "short_name": "Finanças",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#12121C",
-    "theme_color": "#6C63FF",
-    "description": "App de controle financeiro pessoal com contas recorrentes e reserva de emergência.",
+    "background_color": "#EEF3F4",
+    "theme_color": "#065F5B",
+    "description": "App de controle financeiro pessoal com lembretes de vencimento, contas recorrentes e reserva de emergência.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

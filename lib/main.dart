@@ -31,18 +31,24 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final baseTheme = ThemeData(
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: const Color(0xFFEEF3F4),
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF065F5B),
+        primary: const Color(0xFF065F5B),
+        secondary: const Color(0xFF0D9488),
+        surface: Colors.white,
+        brightness: Brightness.light,
+      ),
+      useMaterial3: true,
+    );
+
     return MaterialApp(
       title: 'Controle Financeiro',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        textTheme: GoogleFonts.interTextTheme(
-          ThemeData(brightness: Brightness.dark).textTheme,
-        ),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF6C63FF),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
+      theme: baseTheme.copyWith(
+        textTheme: GoogleFonts.interTextTheme(baseTheme.textTheme),
       ),
       home: const AuthWrapper(),
     );
@@ -60,9 +66,9 @@ class AuthWrapper extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
-            backgroundColor: Color(0xFF12121C),
+            backgroundColor: Color(0xFF065F5B),
             body: Center(
-              child: CircularProgressIndicator(color: Color(0xFF6C63FF)),
+              child: CircularProgressIndicator(color: Colors.white),
             ),
           );
         }
